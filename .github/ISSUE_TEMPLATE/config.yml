@@ -1,8 +1,5 @@
 blank_issues_enabled: false
 contact_links:
-  - name: Documentation
-    url: https://github.com/inmindtechnologies/InmindToolbox
-    about: Visit the main repository for documentation
-  - name: Discussions
-    url: https://github.com/inmindtechnologies/InmindToolbox-issues/discussions
-    about: Ask questions and share ideas
+  - name: Documentation & Support
+    url: https://inmindtechnologies.com/
+    about: Visit our website for documentation and support
