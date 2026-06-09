@@ -1,0 +1,92 @@
+name: Sync to Private Repo
+
+on:
+  issues:
+    types: [opened, edited]
+  issue_comment:
+    types: [created]
+
+permissions:
+  issues: read
+  contents: read
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    # Ignore comments on pull requests (issue_comment fires for both).
+    if: ${{ !github.event.issue.pull_request }}
+    steps:
+      - name: Mint GitHub App token
+        id: app-token
+        uses: actions/create-github-app-token@v1
+        with:
+          app-id: ${{ secrets.SYNC_APP_ID }}
+          private-key: ${{ secrets.SYNC_APP_PRIVATE_KEY }}
+          owner: inmindtechnologies
+          repositories: |
+            InmindToolbox
+            InmindToolbox-issues
+
+      - name: Sync to private
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ steps.app-token.outputs.token }}
+          script: |
+            const PRIV_OWNER = 'inmindtechnologies';
+            const PRIV_REPO = 'InmindToolbox';
+            const PUB_OWNER = context.repo.owner;
+            const PUB_REPO = context.repo.repo;
+            const action = context.payload.action;
+            const issue = context.payload.issue;
+
+            const footer = (n, url) =>
+              `\n\n---\n🌐 **External report** synced from [${PUB_REPO}#${n}](${url})\n<!-- public-issue: ${n} --><!-- synced -->`;
+
+            // Find the private twin number via the marker comment on the public issue.
+            async function findPrivateNumber(publicNumber) {
+              const comments = await github.paginate(github.rest.issues.listComments, {
+                owner: PUB_OWNER, repo: PUB_REPO, issue_number: publicNumber, per_page: 100,
+              });
+              for (const c of comments) {
+                const m = c.body && c.body.match(/<!--\s*private-issue:\s*(\d+)\s*-->/);
+                if (m) return parseInt(m[1], 10);
+              }
+              return null;
+            }
+
+            if (action === 'opened') {
+              const created = await github.rest.issues.create({
+                owner: PRIV_OWNER, repo: PRIV_REPO,
+                title: issue.title,
+                body: `${issue.body || ''}${footer(issue.number, issue.html_url)}`,
+                labels: ['external-report'],
+              });
+              await github.rest.issues.createComment({
+                owner: PUB_OWNER, repo: PUB_REPO, issue_number: issue.number,
+                body: `🔗 Tracked internally as ${PRIV_REPO}#${created.data.number}.\n<!-- private-issue: ${created.data.number} --><!-- synced -->`,
+              });
+              return;
+            }
+
+            if (action === 'edited') {
+              const privateNumber = await findPrivateNumber(issue.number);
+              if (!privateNumber) { console.log('No private twin; skipping edit.'); return; }
+              await github.rest.issues.update({
+                owner: PRIV_OWNER, repo: PRIV_REPO, issue_number: privateNumber,
+                title: issue.title,
+                body: `${issue.body || ''}${footer(issue.number, issue.html_url)}`,
+              });
+              return;
+            }
+
+            if (action === 'created' && context.payload.comment) {
+              const comment = context.payload.comment;
+              if (comment.body.includes('<!-- synced -->')) { console.log('Synced marker; skipping.'); return; }
+              if (comment.user && comment.user.type === 'Bot') { console.log('Bot comment; skipping.'); return; }
+              const privateNumber = await findPrivateNumber(issue.number);
+              if (!privateNumber) { console.log('No private twin; skipping comment.'); return; }
+              await github.rest.issues.createComment({
+                owner: PRIV_OWNER, repo: PRIV_REPO, issue_number: privateNumber,
+                body: `💬 **Reporter commented:**\n\n${comment.body}\n<!-- synced -->`,
+              });
+            }
